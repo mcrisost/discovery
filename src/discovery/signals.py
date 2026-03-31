@@ -748,11 +748,17 @@ def make_dmtimeinterpbasis(alpha=2.0, tndm=False, start_time=None, order=1):
     return dmbasis
 
 def psd2cov(psdfunc, components, T, oversample=3, fmax_factor=1, cutoff=1):
-    if not (isinstance(oversample, int) and isinstance(fmax_factor, int) and isinstance(cutoff, int)):
-        raise ValueError('psd2cov: oversample, fmax_factor and cutoff must be integers.')
+    if not (isinstance(oversample, int) and isinstance(fmax_factor, int)):
+        raise ValueError('psd2cov: oversample and fmax_factor must be integers.')
 
     if components % 2 == 0:
         raise ValueError('psd2cov: number of components must be odd.')
+        
+    if cutoff is not None and not isinstance(cutoff, int):
+        raise ValueError('psd2cov: cutoff must be None or an integer.')
+
+    if isinstance(cutoff, int) and cutoff > oversample:
+        raise ValueError('psd2cov: cutoff must be <= oversample.')
 
     scaled_components = (components - 1) * fmax_factor + 1
     n_freqs = int((scaled_components - 1) / 2 * oversample + 1)
@@ -762,15 +768,19 @@ def psd2cov(psdfunc, components, T, oversample=3, fmax_factor=1, cutoff=1):
 
     if cutoff is not None:
         i_cutoff = int(np.ceil(oversample / cutoff))
-        fs, zs = matrix.jnparray(freqs[i_cutoff:]), jnp.zeros(i_cutoff)
+        fs = matrix.jnparray(freqs[i_cutoff:])
     else:
         fs = matrix.jnparray(freqs)
 
     def covmat(*args):
+        clip_max = 1e6
+        clip_min = 1e-19
+        psd_hi = jnp.clip(psdfunc(fs, 1.0, *args[2:]), clip_min, clip_max)
+        
         if cutoff is not None:
-            psd = jnp.concatenate([zs, psdfunc(fs, 1.0, *args[2:])])
+            psd = jnp.concatenate([jnp.full((i_cutoff,), psd_hi[0], dtype=psd_hi.dtype), psd_hi])
         else:
-            psd = psdfunc(fs, 1.0, *args[2:])
+            psd = psd_hi
 
         fullpsd = jnp.concatenate((psd, psd[-2:0:-1]))
         Cfreq = jnp.fft.ifft(fullpsd, norm='backward')
